@@ -1,0 +1,4 @@
+{
+	"messageRetentionPeriod": 345600,
+	"runLambda": "sample"
+}

@@ -1,0 +1,29 @@
+{
+	"name": "SampleTable",
+	"hash_key": "id",
+	"attributes": [
+		{
+			"name": "id",
+			"type": "S"
+		},
+		{
+			"name": "email",
+			"type": "S"
+		}
+	],
+	"gsi": [
+		{
+			"name": "EmailIndex",
+			"hash_key": "email",
+			"write_capacity": 5,
+			"read_capacity": 5,
+			"projection_type": "ALL"
+		}
+	],
+	"trigger": [
+		{
+			"lambda": "sample",
+			"events": ["dynamodb:PutItem"]
+		}
+	]
+}
