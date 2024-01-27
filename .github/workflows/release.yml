@@ -1,4 +1,4 @@
-name: Build and Publish
+name: Publish
 
 on:
   push:
@@ -18,8 +18,7 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: 20.x
-    - run: cp package.json infrastructure/
     - name: Semantic Release
-      run: cd infrastructure && npx semantic-release --branches main
+      run: npx semantic-release --branches main
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
