@@ -1,0 +1,9 @@
+{
+    "name": "fs-terraform",
+    "scripts": {
+		"init": "cd ./infrastructure/dev && terraform init && terraform apply -auto-approve && cd ../ && terraform init",
+		"plan": "cd ./infrastructure && terraform plan",
+		"apply": "cd ./infrastructure && terraform apply -auto-approve",
+		"destroy": "cd ./infrastructure && terraform destroy -auto-approve"    
+    }
+}

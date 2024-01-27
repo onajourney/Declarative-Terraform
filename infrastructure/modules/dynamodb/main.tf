@@ -1,16 +1,15 @@
 locals {
-  default_read_capacity  = 5
-  default_write_capacity = 5
-  default_billing_mode   = "PROVISIONED"
+    default_billing_mode   = "PAY_PER_REQUEST"
 }
 
 # Base resource
 resource "aws_dynamodb_table" "table" {
     name           = var.name
     billing_mode   = local.default_billing_mode
-    read_capacity  = local.default_read_capacity
-    write_capacity = local.default_write_capacity
     hash_key       = var.hash_key
+    range_key      = var.range_key
+    stream_enabled = var.stream_enabled
+    stream_view_type = var.stream_view_type
 
     dynamic "attribute" {
         for_each = var.attributes
@@ -25,8 +24,6 @@ resource "aws_dynamodb_table" "table" {
         content {
             name               = global_secondary_index.value.name
             hash_key           = global_secondary_index.value.hash_key
-            write_capacity     = global_secondary_index.value.write_capacity
-            read_capacity      = global_secondary_index.value.read_capacity
             projection_type    = global_secondary_index.value.projection_type
         }
     }
@@ -52,6 +49,12 @@ variable "hash_key" {
     type = string
 }
 
+variable "range_key" {
+    type        = string
+    description = "The sort key of the table. Required if LSIs are used."
+    default     = null
+}
+
 variable "attributes" {
     type = list(object({
         name = string
@@ -63,8 +66,6 @@ variable "gsi" {
     type = list(object({
         name            = string
         hash_key        = string
-        write_capacity  = number
-        read_capacity   = number
         projection_type = string
     }))
     default = []
@@ -79,7 +80,24 @@ variable "lsi" {
     default = []
 }
 
+variable "stream_enabled" {
+    type        = bool
+    default     = false
+    description = "Enable DynamoDB Streams on the table."
+}
+
+variable "stream_view_type" {
+    type        = string
+    default     = null
+    description = "The view type of the stream. Valid values are KEYS_ONLY, NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES."
+}
+
 variable "tags" {
     type    = map(string)
     default = {}
+}
+
+output "stream_arn" {
+  value = aws_dynamodb_table.table.stream_arn
+  description = "The ARN of the DynamoDB Stream."
 }

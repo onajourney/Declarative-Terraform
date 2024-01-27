@@ -15,6 +15,12 @@ resource "aws_lambda_function" "lambda" {
     source_code_hash = var.source_code_hash
     runtime          = var.runtime != null ? var.runtime : local.default_runtime
     timeout          = var.timeout != null ? var.timeout : local.default_timeout
+    dynamic "environment" {
+        for_each = length(var.environment.variables) > 0 ? [var.environment] : []
+        content {
+            variables = environment.value.variables
+        }
+    }
 }
 
 # User Input (Through JSON file)
@@ -60,6 +66,16 @@ variable "timeout" {
     description = "The amount of time your Lambda Function has to run in seconds."
     type        = number
     default     = null
+}
+
+variable "environment" {
+    description = "The environment variables for the Lambda function"
+    type = object({
+        variables = map(string)
+    })
+    default = {
+        variables = {}
+    }
 }
 
 # Required - As we use the arn values setup aws_lambda_permissions for sns

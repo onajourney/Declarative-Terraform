@@ -1,7 +1,7 @@
-# Allows us to handle resources in a declarative manner
+# Allows us to handle resources through file system
 
 locals {
-    lambda_functions = toset(distinct([for file in fileset("${path.module}/resources/lambda", "**") : dirname(file)]))
+    lambda_functions = toset(distinct([for file in fileset("${path.module}/resources/lambda", "**") : regex("^([^\\\\/]+)", file)[0]]))
     dynamodb_tables = fileset("${path.module}/resources/dynamodb", "*.json")
     ec2_instances = toset(distinct([for file in fileset("${path.module}/resources/ec2", "**") : dirname(file)]))
     parameters = fileset("${path.module}/resources/parameter", "*.json")
@@ -23,11 +23,16 @@ module "dynamodb_table" {
     source     = "./modules/dynamodb"
     name       = each.value.name
     hash_key   = each.value.hash_key
+    range_key   = try(each.value.range_key, null)
     attributes = each.value.attributes
 
     gsi = try(each.value.gsi, [])
     lsi = try(each.value.lsi, [])
     tags = try(each.value.tags, {})
+
+    // Enable stream if the stream property is present in the JSON file
+    stream_enabled  = contains(keys(each.value), "stream")
+    stream_view_type = try(each.value.stream.view_type, null)
 }
 
 # CREATE EXECUTION ROLE FOR LAMBDA FUNCTIONS
@@ -96,27 +101,122 @@ resource "aws_instance" "instances" {
     )
 }
 
+// This handles copying the files / but oly does so on changes - returns installed variable
+data "external" "build" {
+    for_each = {
+        for lambda in local.lambda_functions :
+            lambda => "${path.module}/resources/lambda/${lambda}"
+            if can(file("${path.module}/resources/lambda/${lambda}/package.json"))
+    }
+
+    program = [
+        "node", 
+        "${path.module}/helpers/npm_install.js", 
+        each.value, 
+        "${path.root}/.terraform/tmp/${each.key}"
+    ]
+}
+
 # LOAD LAMBDA FUNCTIONS
 data "archive_file" "lambda_zip" {
-    for_each = local.lambda_functions
+    for_each = {
+        for lambda in local.lambda_functions :
+            lambda => {
+                source_dir = (can(file("${path.root}/.terraform/tmp/${lambda}/package.json")) 
+                    ? (data.external.build[lambda].result["installed"]
+                        ? "${path.root}/.terraform/tmp/${lambda}" 
+                        : "${path.module}/resources/lambda/${lambda}")
+                    : "${path.module}/resources/lambda/${lambda}")
+            }
+    }
 
     type        = "zip"
-    source_dir  = "${path.module}/resources/lambda/${each.key}"
+    source_dir  = each.value.source_dir
     output_path = "${path.root}/.terraform/tmp/${each.key}.zip"
-    excludes    = ["config.json", "test.js"]
-
+    excludes    = ["package.json", "package-lock.json", "config.json", "test.js", "test.ts"]
 }
 
 module "lambdas" {
     source = "./modules/lambda"
 
-    for_each = local.lambda_functions
+    for_each = {
+        for lambda in local.lambda_functions : 
+            lambda => fileexists("${path.module}/resources/lambda/${lambda}/config.json")
+                ? jsondecode(file("${path.module}/resources/lambda/${lambda}/config.json"))
+                : {
+                    Runtime     = null,
+                    Handler     = null,
+                    MemorySize  = null,
+                    Timeout     = null,
+                    Environment = { variables = {} }
+                }
+    }
 
     filename      =  data.archive_file.lambda_zip[each.key].output_path
     function_name = each.key
     role_arn      = aws_iam_role.lambda_role[each.key].arn
-
     source_code_hash = data.archive_file.lambda_zip[each.key].output_base64sha256
+
+    runtime       = try(each.value["Runtime"], null)
+    handler       = try(each.value["Handler"], null)
+    memory_size   = try(each.value["MemorySize"], null)
+    timeout       = try(each.value["Timeout"], null)
+    environment = try(
+        { variables = each.value["Environment"]["variables"] },
+        { variables = {} }
+    )
+}
+
+# CREATE LAMBDA POLICIES FOR ENABLING ACCESS TO DYNAMODB STREAMS
+resource "aws_iam_role_policy" "lambda_dynamodb_stream_policy" {
+    for_each = { 
+        for idx, lambda_info in flatten([
+            for file in local.dynamodb_tables : [
+                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
+                    table_name = trimsuffix(file, ".json"),
+                    lambda_function = lambda_function,
+                }
+            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
+        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info 
+    }
+
+    role = aws_iam_role.lambda_role[each.value.lambda_function].name
+    name = "${each.value.table_name}_${each.value.lambda_function}_dynamodb_stream_policy"
+
+    policy = jsonencode({
+        Version = "2012-10-17",
+        Statement = [
+            {
+                Effect = "Allow",
+                Action = [
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:DescribeStream",
+                    "dynamodb:ListStreams"
+                ],
+                Resource = module.dynamodb_table[each.value.table_name].stream_arn
+            }
+        ]
+    })
+}
+
+# CREATE LAMBDA EVENT SOURCE MAPPINGS (FOR DYNAMODB STREAMS)
+resource "aws_lambda_event_source_mapping" "lambda_event_source_mapping" {
+    for_each = { 
+        for idx, lambda_info in flatten([
+            for file in local.dynamodb_tables : [
+                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
+                    table_name = trimsuffix(file, ".json"),
+                    lambda_function = lambda_function,
+                    starting_position = try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.starting_position, "LATEST")
+                }
+            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
+        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info
+    }
+
+    event_source_arn   = module.dynamodb_table[each.value.table_name].stream_arn
+    function_name      = module.lambdas[each.value.lambda_function].arn
+    starting_position  = each.value.starting_position
 }
 
 # LOAD S3 BUCKETS
@@ -286,7 +386,7 @@ resource "aws_lambda_event_source_mapping" "sqs_lambda_trigger" {
     # Other configurations like batch_size, enabled, etc.
 }
 
-resource "aws_iam_policy" "lambda_sqs_policy" {
+resource "aws_iam_role_policy" "lambda_sqs_policy" {
     for_each = {
         for file in local.sqs_queues : 
         trimsuffix(file, ".json") => jsondecode(file("${path.module}/resources/sqs/${file}"))
@@ -294,9 +394,8 @@ resource "aws_iam_policy" "lambda_sqs_policy" {
             jsondecode(file("${path.module}/resources/sqs/${file}")).runLambda != ""
     }
 
-    name        = "${each.key}_lambda_sqs_policy"
-    description = "A policy to allow ${each.value.runLambda} lambda to interact with ${each.key} SQS"
-
+    role   = aws_iam_role.lambda_role[each.value.runLambda].name
+    name   = "${each.key}_lambda_sqs_policy"
     policy = jsonencode({
         Version = "2012-10-17",
         Statement = [
@@ -312,21 +411,6 @@ resource "aws_iam_policy" "lambda_sqs_policy" {
             }
         ]
     })
-}
-
-# Attach SQS policy to lambda
-resource "aws_iam_role_policy_attachment" "lambda_sqs_attachment" {
-    for_each = {
-        for file in local.sqs_queues : 
-        trimsuffix(file, ".json") => jsondecode(file("${path.module}/resources/sqs/${file}"))
-        if can(jsondecode(file("${path.module}/resources/sqs/${file}")).runLambda) && 
-            jsondecode(file("${path.module}/resources/sqs/${file}")).runLambda != ""
-    }
-
-    role       = aws_iam_role.lambda_role[each.value.runLambda].name
-    policy_arn = aws_iam_policy.lambda_sqs_policy[each.key].arn
-
-    depends_on = [aws_iam_role.lambda_role, aws_iam_policy.lambda_sqs_policy]
 }
 
 resource "aws_ssm_parameter" "parameters" {
@@ -349,4 +433,9 @@ output "instance_access_points" {
     for instance in aws_instance.instances :
     instance.tags["Name"] => instance.public_ip
   }
+}
+
+// ouput lambda_functions
+output "lambda_functions" {
+  value = local.lambda_functions   
 }
