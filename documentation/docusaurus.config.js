@@ -7,7 +7,7 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 
 const organizationOrUser = 'onajourney';
-const projectName = 'fs-terraform';
+const projectName = 'FS-Terraform';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
