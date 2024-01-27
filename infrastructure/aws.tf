@@ -10,6 +10,23 @@ locals {
     sqs_queues = fileset("${path.module}/resources/sqs", "*.json")
 }
 
+
+provider "aws" {
+    region      = var.aws_region
+
+    endpoints {
+        iam       = var.aws_endpoint
+        dynamodb  = var.aws_endpoint
+        lambda    = var.aws_endpoint
+        s3        = var.aws_endpoint == "" ? "" : "http://s3.localhost.localstack.cloud:4566"
+        sqs       = var.aws_endpoint
+        sns       = var.aws_endpoint
+        ssm       = var.aws_endpoint
+        sts       = var.aws_endpoint
+        ec2       = var.aws_endpoint
+    }
+}
+
 # Used for generating unique buckets
 data "aws_caller_identity" "current" {}
 

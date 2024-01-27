@@ -20,10 +20,9 @@
 			"projection_type": "ALL"
 		}
 	],
-	"trigger": [
-		{
-			"lambda": "sample",
-			"events": ["dynamodb:PutItem"]
-		}
-	]
+	"stream": {
+		"lambda": ["sample"],
+		"view_type": "OLD_IMAGE",
+		"starting_position": "LATEST"
+	}
 }

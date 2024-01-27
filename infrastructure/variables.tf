@@ -4,20 +4,6 @@ variable "aws_region" {
     default     = "us-west-2"
 }
 
-# variable "aws_access_key" {
-#     description = "AWS access key for development; dummy value for LocalStack."
-#     type        = string
-#     default     = "test"
-#     sensitive   = true
-# }
-
-# variable "aws_secret_key" {
-#     description = "AWS secret key for development; dummy value for LocalStack."
-#     type        = string
-#     default     = "test"
-#     sensitive   = true
-# }
-
 variable "aws_endpoint" {
     description = "The endpoint URL for aws services. Useful for localstack, ignore for CI/PROD."
     type        = string
