@@ -22,7 +22,7 @@
 	],
 	"stream": {
 		"lambda": ["sample"],
-		"view_type": "OLD_IMAGE",
+		"view_type": "NEW_AND_OLD_IMAGES",
 		"starting_position": "LATEST"
 	}
 }

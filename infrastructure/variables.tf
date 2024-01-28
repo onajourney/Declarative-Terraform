@@ -4,31 +4,25 @@ variable "aws_region" {
     default     = "us-west-2"
 }
 
-variable "aws_endpoint" {
-    description = "The endpoint URL for aws services. Useful for localstack, ignore for CI/PROD."
-    type        = string
-    default     = "http://localhost:4566"
-}
+# variable "docker_username" {
+#     description = "Docker registry username"
+#     type        = string
+#     sensitive   = true
+#     default     = ""
+# }
 
-variable "docker_username" {
-    description = "Docker registry username"
-    type        = string
-    sensitive   = true
-    default     = ""
-}
+# variable "docker_token" {
+#     description = "Docker registry password"
+#     type        = string
+#     sensitive   = true
+#     default     = ""
+# }
 
-variable "docker_token" {
-    description = "Docker registry password"
-    type        = string
-    sensitive   = true
-    default     = ""
-}
-
-variable "docker_image_url" {
-    description = "URL of the Docker image"
-    type        = string
-    default     = "http://localhost:5000/image:latest"
-}
+# variable "docker_image_url" {
+#     description = "URL of the Docker image"
+#     type        = string
+#     default     = "http://localhost:5000/image:latest"
+# }
 
 variable "environment" {
     description = "The environment to deploy resources."
