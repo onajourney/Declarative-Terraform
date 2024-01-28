@@ -13,18 +13,6 @@ locals {
 
 provider "aws" {
     region      = var.aws_region
-
-    endpoints {
-        iam       = var.aws_endpoint
-        dynamodb  = var.aws_endpoint
-        lambda    = var.aws_endpoint
-        s3        = var.aws_endpoint == "" ? "" : "http://s3.localhost.localstack.cloud:4566"
-        sqs       = var.aws_endpoint
-        sns       = var.aws_endpoint
-        ssm       = var.aws_endpoint
-        sts       = var.aws_endpoint
-        ec2       = var.aws_endpoint
-    }
 }
 
 # Used for generating unique buckets
@@ -72,6 +60,28 @@ resource "aws_iam_role" "lambda_role" {
     })
 }
 
+resource "aws_iam_role_policy" "lambda_log_policy" {
+    for_each = local.lambda_functions
+
+    role = aws_iam_role.lambda_role[each.key].name
+    name = "${each.key}_lambda_log_policy"
+
+    policy = jsonencode({
+        Version = "2012-10-17",
+        Statement = [
+            {
+                Effect = "Allow",
+                Action = [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                ],
+                Resource = "arn:aws:logs:*:*:*"
+            }
+        ]
+    })
+}
+
 # LOAD EC2 INSTANCES
 data "aws_ami" "ami_lookup" {
     for_each = { 
@@ -90,32 +100,6 @@ data "aws_ami" "ami_lookup" {
             values = filter.value.values
         }
     }
-}
-
-resource "aws_instance" "instances" {
-    for_each = { for instance in local.ec2_instances : instance => {
-        config = jsondecode(file("${path.module}/resources/ec2/${instance}/config.json"))
-        user_data_files = tolist(fileset("${path.module}/resources/ec2/${instance}", "user_data.*"))
-    }}
-
-    ami = (can(each.value.config["ami"]) && try(can(each.value.config["ami"]["filter"]), false) && length(try(each.value.config["ami"]["filter"], {})) > 0
-        ? data.aws_ami.ami_lookup[each.key].id
-        : each.value.config["ami"])
-
-    instance_type = each.value.config.instance_type
-
-    user_data = templatefile("${path.module}/resources/ec2/${each.key}/${each.value.user_data_files[0]}", {
-        docker_username  = var.docker_username,
-        docker_token     = var.docker_token,
-        docker_image_url = var.docker_image_url
-    })
-
-    tags = merge(
-        lookup(each.value.config, "tags", {}),
-        {
-            "Name" = each.key  # Using the key from the map as the Name tag
-        }
-    )
 }
 
 // This handles copying the files / but oly does so on changes - returns installed variable
@@ -182,58 +166,6 @@ module "lambdas" {
         { variables = each.value["Environment"]["variables"] },
         { variables = {} }
     )
-}
-
-# CREATE LAMBDA POLICIES FOR ENABLING ACCESS TO DYNAMODB STREAMS
-resource "aws_iam_role_policy" "lambda_dynamodb_stream_policy" {
-    for_each = { 
-        for idx, lambda_info in flatten([
-            for file in local.dynamodb_tables : [
-                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
-                    table_name = trimsuffix(file, ".json"),
-                    lambda_function = lambda_function,
-                }
-            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
-        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info 
-    }
-
-    role = aws_iam_role.lambda_role[each.value.lambda_function].name
-    name = "${each.value.table_name}_${each.value.lambda_function}_dynamodb_stream_policy"
-
-    policy = jsonencode({
-        Version = "2012-10-17",
-        Statement = [
-            {
-                Effect = "Allow",
-                Action = [
-                    "dynamodb:GetRecords",
-                    "dynamodb:GetShardIterator",
-                    "dynamodb:DescribeStream",
-                    "dynamodb:ListStreams"
-                ],
-                Resource = module.dynamodb_table[each.value.table_name].stream_arn
-            }
-        ]
-    })
-}
-
-# CREATE LAMBDA EVENT SOURCE MAPPINGS (FOR DYNAMODB STREAMS)
-resource "aws_lambda_event_source_mapping" "lambda_event_source_mapping" {
-    for_each = { 
-        for idx, lambda_info in flatten([
-            for file in local.dynamodb_tables : [
-                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
-                    table_name = trimsuffix(file, ".json"),
-                    lambda_function = lambda_function,
-                    starting_position = try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.starting_position, "LATEST")
-                }
-            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
-        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info
-    }
-
-    event_source_arn   = module.dynamodb_table[each.value.table_name].stream_arn
-    function_name      = module.lambdas[each.value.lambda_function].arn
-    starting_position  = each.value.starting_position
 }
 
 # LOAD S3 BUCKETS
@@ -445,11 +377,58 @@ resource "aws_ssm_parameter" "parameters" {
     tags = lookup(each.value, "tags", {})
 }
 
-output "instance_access_points" {
-  value = {
-    for instance in aws_instance.instances :
-    instance.tags["Name"] => instance.public_ip
-  }
+
+# CREATE LAMBDA POLICIES FOR ENABLING ACCESS TO DYNAMODB STREAMS
+resource "aws_iam_role_policy" "lambda_dynamodb_stream_policy" {
+    for_each = { 
+        for idx, lambda_info in flatten([
+            for file in local.dynamodb_tables : [
+                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
+                    table_name = trimsuffix(file, ".json"),
+                    lambda_function = lambda_function,
+                }
+            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
+        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info 
+    }
+
+    role = aws_iam_role.lambda_role[each.value.lambda_function].name
+    name = "${each.value.table_name}_${each.value.lambda_function}_dynamodb_stream_policy"
+
+    policy = jsonencode({
+        Version = "2012-10-17",
+        Statement = [
+            {
+                Effect = "Allow",
+                Action = [
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:DescribeStream",
+                    "dynamodb:ListStreams"
+                ],
+                Resource = module.dynamodb_table[each.value.table_name].stream_arn
+            }
+        ]
+    })
+}
+
+# CREATE LAMBDA EVENT SOURCE MAPPINGS (FOR DYNAMODB STREAMS)
+# Handling at the end to allow to stream updates to take place on tables
+resource "aws_lambda_event_source_mapping" "lambda_event_source_mapping" {
+    for_each = { 
+        for idx, lambda_info in flatten([
+            for file in local.dynamodb_tables : [
+                for lambda_function in try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.lambda, []) : {
+                    table_name = trimsuffix(file, ".json"),
+                    lambda_function = lambda_function,
+                    starting_position = try(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream.starting_position, "LATEST")
+                }
+            ] if can(jsondecode(file("${path.module}/resources/dynamodb/${file}")).stream)
+        ]) : "${lambda_info.table_name}-${lambda_info.lambda_function}" => lambda_info
+    }
+
+    event_source_arn   = module.dynamodb_table[each.value.table_name].stream_arn
+    function_name      = module.lambdas[each.value.lambda_function].arn
+    starting_position  = each.value.starting_position
 }
 
 // ouput lambda_functions
