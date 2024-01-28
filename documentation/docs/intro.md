@@ -33,7 +33,6 @@ infrastructure/
 
 Let's break down the usage of each:
 - **helpers** provide scripts for lambda deployment (npm installs, etc).
-- **dev** facilitates local development with local stack.
 - **aws** contains aws infrastructure.
 - **aws.tf** contains FS code to boostrap `/aws` and aws provider.
 - **main.tf** contains our terraform configuration.
