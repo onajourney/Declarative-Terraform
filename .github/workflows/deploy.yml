@@ -6,10 +6,16 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  TF_VAR_ENVIRONMENT: 'live'
-
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ['development', 'staging', 'production']
+    steps:
+      - name: Setup Job
+        run: echo "Setting up for ${{ matrix.environment }} environment"
+
   deploy:
     needs: setup-terraform-backend
     runs-on: ubuntu-latest
@@ -45,12 +51,12 @@ jobs:
         run: terraform apply -auto-approve
 
   setup-terraform-backend:
+    needs: setup
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     outputs:
       account_id: ${{ steps.get-account-id.outputs.account_id }}
       backend_bucket: ${{ steps.create-bucket.outputs.bucket_name }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,7 +77,7 @@ jobs:
       - name: Create S3 state bucket if it doesn't exist
         id: create-bucket
         run: |
-          BUCKET_NAME="terraform-state-${{ env.TF_VAR_ENVIRONMENT }}-${{ vars.AWS_REGION }}-${{ steps.get-account-id.outputs.account_id }}"
+          BUCKET_NAME="terraform-state-${{ matrix.environment }}-${{ vars.AWS_REGION }}-${{ steps.get-account-id.outputs.account_id }}"
           if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
             echo "Bucket $BUCKET_NAME already exists"
           else
@@ -118,9 +124,4 @@ jobs:
             --point-in-time-recovery-specification PointInTimeRecoveryEnabled=True
           echo "Point-In-Time Recovery enabled for $TABLE_NAME."
       
-      - name: Small buffer
-        if: env.RESOURCE_CREATED == 'true'
-        run: |
-          echo "Waiting for resources to be fully consistent..."
-          sleep 30 # Waits for 30 seconds
             
